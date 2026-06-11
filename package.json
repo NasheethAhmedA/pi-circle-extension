@@ -1,0 +1,45 @@
+{
+  "name": "pi-circle-extension",
+  "version": "0.2.0",
+  "description": "A Pi package for center-led multi-agent orchestration.",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "multi-agent",
+    "orchestration",
+    "circle"
+  ],
+  "files": [
+    "index.ts",
+    "parallel.ts",
+    "README.md",
+    "LICENSE",
+    "defaults/**",
+    "package.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NasheethAhmedA/pi-circle-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NasheethAhmedA/pi-circle-extension/issues"
+  },
+  "homepage": "https://github.com/NasheethAhmedA/pi-circle-extension#readme"
+}

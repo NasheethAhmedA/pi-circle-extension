@@ -1,0 +1,7 @@
+{
+  "name": "idea-circle",
+  "description": "Refines and evolves ideas through diverse perspectives — expansion, criticism, implementation, documentation, and decision-making",
+  "agents": ["visionary", "critic", "architect", "documentor"],
+  "createdAt": "2026-05-04T00:00:00.000Z",
+  "updatedAt": "2026-05-18T00:00:00.000Z"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "coding-circle",
+  "description": "Full-lifecycle software development through coordinated specialists \u2014 planning, architecture, coding, review, debugging, testing, and documentation",
+  "agents": [
+    "planner",
+    "architect",
+    "coder",
+    "documentor"
+  ],
+  "createdAt": "2026-05-19T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z"
+}
