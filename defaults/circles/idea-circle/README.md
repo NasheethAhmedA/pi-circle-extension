@@ -1,48 +1,44 @@
 # Idea Circle
 
-A structured idea refinement circle that evolves ideas through diverse specialist perspectives.
+Idea Circle is for structured idea exploration and refinement.
 
-## Architecture
+Use it when you want to:
+- expand an idea
+- challenge assumptions
+- compare directions
+- shape an idea into something more buildable
+- maintain idea notes and supporting context over time
 
-- **Center** — The coordinator. Owns all idea-circle-specific logic: scripts, workflows, folder structure knowledge. Orchestrates the flow between agents.
-- **Agents** — Generic specialists (visionary, critic, architect, documentor). They have no idea-circle-specific knowledge and can be reused in any circle.
+## Focus
 
-## Agents
+Idea Circle helps move an idea through multiple perspectives:
+- exploration
+- critique
+- structure
+- documentation
 
-| Agent | Role | Focus |
-|-------|------|-------|
-| visionary | Divergent Thinker | Expands possibilities, probes assumptions, finds new angles |
-| critic | Constructive Analyst | Stress-tests ideas, identifies risks, pairs problems with solutions |
-| architect | System Design | Proposes buildable approaches with patterns, trade-offs, and structure |
-| documentor | Documentation | Maintains /SPEC folder or idea documentation structure |
+## Agents used by this circle
 
-## Structure
+| Agent | Role |
+|-------|------|
+| visionary | expands possibilities and finds new directions |
+| critic | stress-tests the idea and surfaces risks |
+| architect | shapes the idea into a more concrete structure |
+| documentor | maintains idea documentation and supporting artifacts |
 
-```
-circles/idea-circle/
-├── center/
-│   ├── AGENT.md           # Coordinator (idea-circle-specific)
-│   └── skills/            # Workflow definitions (loaded as skills for center)
-├── scripts/               # Shell scripts (NOT auto-loaded, called via bash by center)
-├── circle.json
-└── README.md
-```
+## Typical workflow
 
-## Workflow
-
-1. User presents idea → Center scaffolds and invokes visionary (expand mode)
-2. Visionary expands → Center summarizes and invokes critic
-3. Critic evaluates → Center summarizes and invokes architect
-4. Architect proposes → Center summarizes and invokes critic (refinement mode)
-5. Visionary narrows → Center records decision and reports to user
-
-Center handles ALL script execution and documentation updates directly.
+1. the user presents an idea
+2. the center routes to `visionary` for expansion
+3. the center routes to `critic` for evaluation
+4. the center routes to `architect` for structure
+5. the center records outcomes and keeps the idea artifacts organized
 
 ## Scripts
 
-All in `scripts/` — called by center via full path:
+This circle uses circle-owned scripts for idea tracking and documentation tasks.
+They are called through the circle's script directory:
+
 ```bash
 bash <resolved-circle-root>/scripts/<script-name>.sh [args]
 ```
-
-See center's AGENT.md for the complete script reference.

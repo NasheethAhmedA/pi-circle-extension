@@ -8,24 +8,24 @@ Use it when you want to:
 - create a new global agent
 - refine an existing global agent
 
-## What it is for
+## Focus
 
-Compass Circle exists to help you design for the current Circle extension model.
+Compass Circle is specifically for designing within the current Circle extension model.
 
-That means it works around these rules:
+It helps you produce circles and agents that follow these rules:
 - every circle has one circle-specific `center`
 - circles reference reusable global agents by name
-- global agents should stay generic and reusable
-- centers should coordinate rather than contain all specialist logic
-- center skills should stay thin and workflow-oriented
-- deeper specialist behavior should live in agent-owned skills
-- reusable scripts should live with the owning specialist
-- circle-owned scripts should exist only when they are truly circle-specific
+- global agents stay generic and reusable
+- centers coordinate rather than contain all specialist behavior
+- center skills stay thin and workflow-oriented
+- deeper specialist behavior lives in agent-owned skills
+- reusable scripts live with the owning specialist
+- circle-owned scripts exist only when they are truly specific to that circle
 
-## Agents used by Compass Circle
+## Agents used by this circle
 
-| Agent | Role in this circle |
-|-------|---------------------|
+| Agent | Role |
+|-------|------|
 | visionary | explores directions, roles, and workflow options |
 | architect | defines concrete structure and boundaries |
 | critic | stress-tests clarity, overlap, and ownership |
@@ -42,8 +42,7 @@ That means it works around these rules:
 
 ## Scripts
 
-Compass Circle provides scripts that scaffold or inspect **user-owned** circles and agents.
-These scripts are for creating or validating overrides under the user agent root.
+Compass Circle provides scripts for creating or validating user-owned circles and agents.
 
 | Script | Purpose |
 |--------|---------|

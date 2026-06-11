@@ -1,53 +1,55 @@
 # Coding Circle
 
-Full-lifecycle software development through coordinated specialists — planning, architecture, coding, verification, and documentation.
+Coding Circle is for full-lifecycle software development through coordinated specialists.
 
-## Architecture
+Use it for work such as:
+- new features
+- bug fixes
+- refactors
+- code review
+- architecture changes
+- performance work
+- documentation tied to implementation
 
-- **Center** — The coordinator. Handles only trivial tasks directly, delegates everything else. Owns workflow orchestration.
-- **Agents** — Generic specialists (4 total). No coding-circle-specific knowledge. Reusable in any circle.
+## Focus
 
-## Agents
+Coding Circle coordinates the software delivery loop:
+- understand the codebase
+- plan the work
+- design structure when needed
+- implement and verify changes
+- document what matters
 
-| Agent | Role | Modes |
-|-------|------|-------|
-| planner | Task Decomposition | Plan |
-| architect | System Design | Design / Structure / Analysis |
-| coder | Implementation and Verification | Implement / Refactor / Review / Debug / Write tests |
-| documentor | Documentation | Maintain /SPEC folder |
+## Agents used by this circle
 
-## Center's Decision Logic
+| Agent | Role |
+|-------|------|
+| planner | breaks implementation work into steps |
+| architect | handles structure, boundaries, and design |
+| coder | implements, debugs, reviews, refactors, and verifies |
+| documentor | maintains technical documentation |
 
-- **Trivial** (explicit command, single read) → Center handles directly
-- **Everything else** → Delegates to the appropriate agent
-- **After code changes** → Prefer verification (tests, typecheck, build)
-- **Findings/issues** → Ask user before auto-fixing by default
+## Typical workflows
 
-## Workflows
-
-| Trigger | Pipeline |
-|---------|----------|
+| Goal | Usual path |
+|------|------------|
 | New feature | planner → architect (if needed) → coder |
 | Bug fix | coder |
-| Code review | coder |
 | Refactor | architect (if needed) → coder |
-| Security audit | critic → coder (if fixes needed) |
-| Performance | coder → architect (if structural redesign needed) |
-| Architecture | architect |
+| Code review | coder |
+| Performance work | coder → architect (if structural redesign is needed) |
+| Architecture design | architect |
 | Documentation | documentor |
-| "Why is this happening?" | coder |
 
-## Script Ownership
+## Scripts used by this circle
 
 ### Circle-owned workflow script
-These remain specific to coding-circle orchestration:
 
 ```bash
 bash <resolved-circle-root>/scripts/project-scan.sh [args]
 ```
 
 ### Architect-owned reusable scripts
-These are now specialist-owned and reusable:
 
 ```bash
 bash <resolved-agent-root>/architect/scripts/file-map.sh [args]
@@ -56,7 +58,6 @@ bash <resolved-agent-root>/architect/scripts/dependency-check.sh [args]
 ```
 
 ### Coder-owned reusable scripts
-These are now specialist-owned and reusable:
 
 ```bash
 bash <resolved-agent-root>/coder/scripts/run-tests.sh [args]
