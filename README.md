@@ -114,15 +114,21 @@ Examples:
 
 ### `load_skill`
 
-Circle uses progressive skill disclosure.
-The agent only sees a list of available skills by default.
-When a task clearly matches a skill, load the full skill before using it.
+Circle uses progressive skill disclosure with ephemeral capsule injection.
+The agent only sees a compact index of available skills by default.
+When a task clearly matches a skill, the agent calls `load_skill` to activate it.
 
 Typical uses:
 - list skills: `load_skill({ skill_name: "list" })`
 - load one skill: `load_skill({ skill_name: "implementation" })`
 
-This keeps routine requests lighter while still allowing deep operating playbooks when needed.
+Key behaviors:
+- **One skill at a time.** Only one skill can be loaded per agent at any time. Loading a new skill automatically evicts the previous one.
+- **Ephemeral injection.** Loaded skill content is injected into the active-agent capsule, not stored in session history. It appears in `<loaded_skills>` within the capsule and disappears when the agent switches.
+- **Per-agent isolation.** Each agent's loaded skill is cleared on `invoke`. The new agent starts with a clean skill slate.
+- **User visibility.** Skill content is passed via tool result `details` so users can inspect it with `ctrl+o`, without polluting the LLM context.
+
+This design keeps routine requests lighter while still allowing deep domain knowledge when needed.
 
 ### `spawn`
 
@@ -174,27 +180,50 @@ The current acting agent can change during a session through `invoke`.
 ### Progressive skill disclosure
 
 Agents are not injected with every full skill by default.
-Instead, they receive a compact list of available skills.
-When a task matches one of them, the full skill is loaded on demand with `load_skill`.
+Instead, they receive a compact index of available skills (name + one-line description).
+When a task matches one of them, the agent calls `load_skill` to activate it.
 
-This keeps the default working context smaller and more focused while still allowing deep behavior when it is actually needed.
+The loaded skill content is injected ephemerally into the active-agent capsule — not stored as a tool result in session history. When a different skill is loaded, the previous one is evicted (K=1 limit). When the agent switches via `invoke`, all loaded skills are cleared.
+
+This matters because it changes the scaling behavior:
+
+**Standard skill loading** (tool result in history) stores the full skill content permanently. Every subsequent LLM turn pays to send it as cached-read input, even when a different agent is active. Over a multi-agent session, skill content accumulates: agent A's skills + agent B's skills + agent C's skills are all in every request. The cost grows as **O(agents² × turns × skill_size)** — quadratic in the number of agents.
+
+**Circle's ephemeral skill loading** injects only the current agent's loaded skill into the capsule. When the agent switches, the skill disappears. No accumulation, no cross-agent pollution. The cost is **O(agents × turns × skill_size)** — linear.
+
+The tradeoff: the capsule is at the tail of the message array, so it is uncached on every turn (unlike history-based skills which benefit from prefix caching at ~10% cost). For short sessions with few agents, history-based loading can be cheaper per-token. But for longer circle sessions with multiple agent switches — exactly the use case this extension is built for — the linear scaling wins decisively.
+
+### Authoring agents and skills
+
+Keep `AGENT.md` small and identity-focused: the agent's role, core rules, and behavioral guidelines. This content is always present in the capsule on every turn.
+
+Put domain knowledge, operational playbooks, and detailed procedures into skills. Skills are loaded on demand and only one is active at a time, so they can be larger without permanently inflating the context.
+
+This separation means:
+- `AGENT.md` (~200-500 tokens): always present, defines who the agent is
+- Skills (~500-2000 tokens each): loaded when needed, defines how the agent operates for a specific task type
 
 ### Context layering
 
 The runtime builds the request in layers:
 
-1. stable system prompt and circle preamble
-2. session history
-3. active-agent capsule
+1. stable system prompt (unchanged across agent switches)
+2. session history (cached by providers via prefix matching)
+3. active-agent capsule (ephemeral, injected fresh each turn)
 4. the current live user message
 
 The active-agent capsule contains:
-- the current acting agent identity
-- circle/point mode information
+- the current acting agent identity and circle/mode metadata
 - the agent's `AGENT.md` or center prompt
-- the active agent's available skills
+- `<skills_available>` index of unloaded skills
+- `<loaded_skills>` with the full content of the currently loaded skill (if any)
 
-Placing the active-agent capsule near the live request keeps the stable part of the prompt more reusable while keeping the most changeable agent-specific instructions close to the active turn.
+The capsule is injected by the `context` hook via `transformContext` and is never persisted in session history. It exists only for the duration of one LLM API call. This means:
+- The system prompt and session history form a stable prefix that providers can cache across turns.
+- Agent switches only change the capsule at the tail — the cached prefix is unaffected.
+- Loaded skill content lives in the capsule and vanishes on agent switch, preventing context accumulation.
+
+This arrangement minimizes cache invalidation on agent switches: the entire history prefix stays cached, and only the capsule (typically 500-2000 tokens) is re-sent uncached.
 
 ### Why the extension is structured this way
 

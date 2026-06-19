@@ -241,23 +241,41 @@ function getSkillMetadata(skillPath: string): { name: string; description: strin
   }
 }
 
-function buildSkillsAvailableXml(skillPaths: string[]): string {
-  if (skillPaths.length === 0) return "";
-
-  let skillsContent = "\n\n<skills_available>\n";
-  skillsContent += "Use a skill when the task clearly matches it. Check this list first. If unsure, call `load_skill` with `skill_name: \"list\"`. Load the full skill before using it. Do not load the same skill again if its full instructions are already in the current context.\n";
-
-  for (const sp of skillPaths) {
+function buildSkillsAvailableXml(skillPaths: string[], loaded: Set<string>): string {
+  const unloaded = skillPaths.filter(sp => {
     const meta = getSkillMetadata(sp);
-    if (!meta) continue;
-    skillsContent += "  <skill>\n";
-    skillsContent += `    <name>${meta.name}</name>\n`;
-    skillsContent += `    <description>${meta.description}</description>\n`;
-    skillsContent += "  </skill>\n";
+    return meta && !loaded.has(meta.name);
+  });
+
+  if (unloaded.length === 0 && loaded.size === 0) return "";
+
+  let result = "";
+
+  if (unloaded.length > 0) {
+    result += "\n\n<skills_available>\n";
+    result += "Optional aids you can load via `load_skill` if useful. Do not load skills already in <loaded_skills>.\n";
+    for (const sp of unloaded) {
+      const meta = getSkillMetadata(sp);
+      if (!meta) continue;
+      result += "  <skill>\n";
+      result += `    <name>${meta.name}</name>\n`;
+      result += `    <description>${meta.description}</description>\n`;
+      result += "  </skill>\n";
+    }
+    result += "</skills_available>";
   }
 
-  skillsContent += "</skills_available>";
-  return skillsContent;
+  if (loaded.size > 0) {
+    result += "\n\n<loaded_skills>";
+    for (const sp of skillPaths) {
+      const meta = getSkillMetadata(sp);
+      if (!meta || !loaded.has(meta.name)) continue;
+      result += `\n\n# Skill: ${meta.name}\n\n${meta.content}`;
+    }
+    result += "\n</loaded_skills>";
+  }
+
+  return result;
 }
 
 function buildCenterContext(config: CircleConfig): string {
@@ -287,22 +305,13 @@ ${roster}
 `;
 }
 
-function buildStaticCirclePreamble(config: CircleConfig): string {
-  const allAgents = ["center", ...config.agents].map(n => "@" + n).join(", ");
-  return `[Circle: ${config.name}]
-You are operating inside the "${config.name}" circle.
-Available agents in this circle: ${allAgents}.
-Use the invoke tool to switch between agents. Use invoke with agent "center" to return to the coordinator.
-Agent-specific instructions and available skills for the active agent are injected later in the request context, near the bottom, immediately before the live user message when possible.`;
-}
-
-function buildActiveAgentCapsule(agentName: string, circleName: string | null): string {
+function buildActiveAgentCapsule(agentName: string, circleName: string | null, loaded: Set<string>): string {
   const isCenter = agentName === "center" && !!circleName;
   const agentContext = isCenter && circleName
     ? getCenterContext(circleName)
     : (getAgentMdContent(agentName) || "");
   const skills = getSkills(agentName, circleName, isCenter);
-  const skillsContent = buildSkillsAvailableXml(skills);
+  const skillsContent = buildSkillsAvailableXml(skills, loaded);
 
   let header = `[Active Agent: @${agentName}]`;
   if (circleName) {
@@ -415,62 +424,81 @@ export default function (pi: ExtensionAPI) {
   let activeCircle: CircleConfig | null = null;
   let activeAgent: string = "center";
   let pointAgent: string | null = null; // Direct 1:1 with a global agent (no circle)
+  let loadedSkills: Set<string> = new Set();
+
+  // Track the last message from previous loop (for capsule positioning)
+  // This is the message BEFORE which the capsule should be inserted
+  let prevLoopLastMsg: unknown | null = null;
 
   // ─── Context Injection ─────────────────────────────────────────────
 
-  pi.on("before_agent_start", async (event, _ctx) => {
-    // Point mode: direct 1:1 with a single agent
-    if (pointAgent) {
-      return {
-        systemPrompt: event.systemPrompt,
-        message: {
-          customType: "circle-agent-label",
-          content: pointAgent,
-          display: true,
-          details: { agent: pointAgent, mode: "point" },
-        },
-      };
-    }
+  // Note: circle-agent-label messages are no longer sent to the conversation.
+  // Agent switches are tracked internally, and status is shown in the UI status bar only.
+  // This keeps the context clean and focused on actual task content.
 
-    // Circle mode
-    if (!activeCircle) return;
-
-    return {
-      systemPrompt: event.systemPrompt + "\n\n" + buildStaticCirclePreamble(activeCircle),
-      message: {
-        customType: "circle-agent-label",
-        content: activeAgent,
-        display: true,
-        details: { agent: activeAgent, circle: activeCircle.name, mode: "circle" },
-      },
-    };
-  });
-
-  pi.on("context", async (event, _ctx) => {
+  pi.on("context", async (event, ctx) => {
     const currentAgent = pointAgent || activeAgent;
     const currentCircleName = pointAgent ? null : (activeCircle?.name || null);
 
+    // No active agent/circle - skip
     if (!currentAgent || (!pointAgent && !activeCircle)) return;
 
-    const capsule = buildActiveAgentCapsule(currentAgent, currentCircleName);
+    const capsule = buildActiveAgentCapsule(currentAgent, currentCircleName, loadedSkills);
     if (!capsule) return;
 
-    const injectedMessage = {
+    const capsuleMessage = {
       role: "user" as const,
       content: `[Active Agent Context — injected by circle extension]\n\n${capsule}`,
       timestamp: Date.now(),
     };
 
     const messages = [...event.messages];
-    const lastIndex = messages.length - 1;
-    if (lastIndex >= 0 && messages[lastIndex] && "role" in messages[lastIndex] && messages[lastIndex].role === "user") {
-      messages.splice(lastIndex, 0, injectedMessage);
-    } else {
-      messages.push(injectedMessage);
+    
+    // Sliding capsule logic (simplified):
+    // - Remove old capsule
+    // - Insert capsule just before the last message (handles all edge cases)
+    //   - When prevLoopLastMsg exists: it will be in messages, insert after it
+    //   - When prevLoopLastMsg is null/missing: insert before last message
+    //   - This works for first turn, tree command, and normal turns
+    
+    // Step 1: Remove any previously injected capsule
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m && "role" in m && m.role === "user" &&
+          typeof m.content === "string" &&
+          m.content.startsWith("[Active Agent Context — injected by circle extension]")) {
+        messages.splice(i, 1);
+        break;
+      }
     }
+
+    // Step 2: Find insertion point - insert capsule AFTER prevLoopLastMsg, or before last
+    let insertAt = messages.length; // Default: at end
+    
+    // Try to find prevLoopLastMsg in messages
+    if (prevLoopLastMsg) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m === prevLoopLastMsg) {
+          insertAt = i + 1;
+          break;
+        }
+      }
+    }
+    
+    // If prevLoopLastMsg not found or not in messages, insert before last message
+    if (insertAt === messages.length && messages.length > 0) {
+      insertAt = messages.length - 1;
+    }
+
+    messages.splice(insertAt, 0, capsuleMessage);
+
+    // Step 3: Update prevLoopLastMsg for next turn
+    prevLoopLastMsg = messages[messages.length - 1];
 
     return { messages };
   });
+
 
   // ─── User @agent-name Detection ───────────────────────────────────
 
@@ -485,6 +513,7 @@ export default function (pi: ExtensionAPI) {
       const allAgents = ["center", ...activeCircle.agents];
       if (allAgents.includes(target)) {
         activeAgent = target;
+        loadedSkills.clear();
         ctx.ui.setStatus("circle", ctx.ui.theme.fg("warning", `🏛️ ${activeCircle.name} → @${activeAgent}`));
         return { action: "transform" as const, text: message };
       }
@@ -502,9 +531,9 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "Load the full operational playbook for a specific skill. Use this when you need to apply a skill listed in your <skills_available> section.",
     promptGuidelines: [
       "Use skills when the task clearly matches one of the available skill descriptions.",
-      "Before loading a specific skill, first check the available skill list in your prompt and pick the best match.",
+      "Before loading a specific skill, first check the <skills_available> list in your active context and pick the best match.",
       "If you are unsure what skills are available, call load_skill with skill_name: 'list'.",
-      "If the full skill is already present in the current context, do not call load_skill again.",
+      "Skills listed in <loaded_skills> are already active — do NOT call load_skill for them again.",
       "Do not guess another agent's skills. If a needed skill belongs to another agent, use invoke to switch instead.",
       "Load the full skill before applying it; do not rely only on the short description.",
     ],
@@ -531,7 +560,8 @@ export default function (pi: ExtensionAPI) {
         for (const sp of skills) {
           const meta = getSkillMetadata(sp);
           if (!meta) continue;
-          listStr += `- **${meta.name}**: ${meta.description}\n`;
+          const marker = loadedSkills.has(meta.name) ? " *(loaded)*" : "";
+          listStr += `- **${meta.name}**: ${meta.description}${marker}\n`;
         }
         return { content: [{ type: "text", text: listStr }] };
       }
@@ -542,10 +572,16 @@ export default function (pi: ExtensionAPI) {
         if (!meta) continue;
 
         if (meta.name === args.skill_name) {
+          if (loadedSkills.has(meta.name)) {
+            return {
+              content: [{ type: "text", text: `Skill '${meta.name}' is already loaded in your active context. No need to load it again.` }]
+            };
+          }
+          loadedSkills.clear();
+          loadedSkills.add(meta.name);
           return {
-            content: [
-              { type: "text", text: `# Skill: ${meta.name}\n\n${meta.content}` }
-            ]
+            content: [{ type: "text", text: `Skill '${meta.name}' loaded into your active context. It is now available in your agent instructions.` }],
+            details: { skillName: meta.name, skillContent: meta.content },
           };
         }
       }
@@ -583,15 +619,18 @@ export default function (pi: ExtensionAPI) {
     },
     renderResult(result, options, theme) {
       const textPart = result.content.find((p) => p.type === "text");
-      const fullText = textPart?.type === "text" ? textPart.text : "(no output)";
-      if (options.expanded) {
-        return new Text(fullText, 0, 0);
+      const statusText = textPart?.type === "text" ? textPart.text : "(no output)";
+      const details = result.details as { skillName?: string; skillContent?: string } | undefined;
+
+      if (options.expanded && details?.skillContent) {
+        return new Text(`${statusText}\n\n${theme.fg("dim", "─── Skill Content ───")}\n${details.skillContent}`, 0, 0);
       }
 
-      const lines = fullText.split("\n");
-      const preview = lines.slice(0, 3).join("\n");
-      const more = lines.length > 3 ? `\n${theme.fg("dim", `... (${lines.length - 3} more lines, ctrl+o to expand)`)}` : "";
-      return new Text(preview + more, 0, 0);
+      if (details?.skillContent) {
+        return new Text(`${statusText}\n${theme.fg("dim", "(ctrl+o to view skill content)")}`, 0, 0);
+      }
+
+      return new Text(statusText, 0, 0);
     }
   });
 
@@ -651,6 +690,7 @@ export default function (pi: ExtensionAPI) {
         }
         activeCircle = circle;
         pointAgent = null;
+        loadedSkills.clear();
 
         const allAgents = ["center", ...circle.agents];
         if (params.agent && allAgents.includes(params.agent)) {
@@ -662,12 +702,6 @@ export default function (pi: ExtensionAPI) {
         }
 
         ctx.ui.setStatus("circle", ctx.ui.theme.fg("warning", `\u{1F3DB}\uFE0F ${circle.name} \u2192 @${activeAgent}`));
-        pi.sendMessage({
-          customType: "circle-agent-label",
-          content: activeAgent,
-          display: true,
-          details: { agent: activeAgent, circle: circle.name, mode: "circle" },
-        }, { deliverAs: "steer" });
 
         let response = prevCircle
           ? `Switched circle: ${prevCircle} \u2192 ${circle.name}, active: @${activeAgent}`
@@ -684,13 +718,9 @@ export default function (pi: ExtensionAPI) {
         if (allAgents.includes(params.agent)) {
           activeAgent = params.agent;
           pointAgent = null;
+          loadedSkills.clear();
           ctx.ui.setStatus("circle", ctx.ui.theme.fg("warning", `\u{1F3DB}\uFE0F ${activeCircle.name} \u2192 @${activeAgent}`));
-          pi.sendMessage({
-            customType: "circle-agent-label",
-            content: params.agent,
-            display: true,
-            details: { agent: params.agent, circle: activeCircle.name, mode: "circle" },
-          }, { deliverAs: "steer" });
+
           let response = `Switched: @${prev} \u2192 @${params.agent}`;
           if (params.task) response += `\nTask: ${params.task}`;
           return { content: [{ type: "text", text: response }], details: { previousAgent: prev, newAgent: params.agent, task: params.task } };
@@ -701,13 +731,8 @@ export default function (pi: ExtensionAPI) {
         if (globalAgent) {
           pointAgent = params.agent;
           activeAgent = params.agent;
+          loadedSkills.clear();
           ctx.ui.setStatus("circle", ctx.ui.theme.fg("accent", `\u{1F3AF} @${params.agent} (from ${activeCircle.name})`));
-          pi.sendMessage({
-            customType: "circle-agent-label",
-            content: params.agent,
-            display: true,
-            details: { agent: params.agent, mode: "point" },
-          }, { deliverAs: "steer" });
           let response = `Point: @${params.agent} (global agent, outside circle)`;
           if (params.task) response += `\nTask: ${params.task}`;
           response += `\nUse invoke with agent 'center' to return to the circle.`;
@@ -722,13 +747,8 @@ export default function (pi: ExtensionAPI) {
         const prev = pointAgent;
         pointAgent = null;
         activeAgent = "center";
+        loadedSkills.clear();
         ctx.ui.setStatus("circle", undefined);
-        pi.sendMessage({
-          customType: "circle-agent-label",
-          content: "center",
-          display: true,
-          details: { agent: "center", mode: "off" },
-        }, { deliverAs: "steer" });
         return { content: [{ type: "text", text: `Point session ended. @${prev} → normal mode.` }], details: { previousAgent: prev, mode: "off" } };
       }
 
@@ -737,13 +757,8 @@ export default function (pi: ExtensionAPI) {
       if (globalAgent) {
         pointAgent = params.agent;
         activeAgent = params.agent;
+        loadedSkills.clear();
         ctx.ui.setStatus("circle", ctx.ui.theme.fg("accent", `\u{1F3AF} @${params.agent}`));
-        pi.sendMessage({
-          customType: "circle-agent-label",
-          content: params.agent,
-          display: true,
-          details: { agent: params.agent, mode: "point" },
-        }, { deliverAs: "steer" });
         let response = `Point: @${params.agent}`;
         if (params.task) response += `\nTask: ${params.task}`;
         return { content: [{ type: "text", text: response }], details: { newAgent: params.agent, task: params.task, mode: "point" } };
@@ -1089,6 +1104,7 @@ export default function (pi: ExtensionAPI) {
 
       activeCircle = circle;
       activeAgent = "center";
+
       ctx.ui.setStatus("circle", ctx.ui.theme.fg("warning", `🏛️ ${circle.name} → @center`));
       ctx.ui.notify(
         `Circle "${circle.name}" active.\nAgents: ${circle.agents.map(a => "@" + a).join(", ")}\nUse @agent-name to invoke directly.`,
@@ -1102,9 +1118,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       if (!activeCircle && !pointAgent) { ctx.ui.notify("Nothing active.", "info"); return; }
       const label = activeCircle ? `Circle "${activeCircle.name}"` : `Point @${pointAgent}`;
-      activeCircle = null;
-      activeAgent = "center";
-      pointAgent = null;
+      clearCircleState();
       ctx.ui.setStatus("circle", undefined);
       ctx.ui.notify(`${label} deactivated.`, "info");
     },
@@ -1126,12 +1140,10 @@ export default function (pi: ExtensionAPI) {
       }
       if (!name) return;
 
-      // Deactivate any circle
-      activeCircle = null;
-      activeAgent = "center";
-
-      // Set point mode
+      // Deactivate any circle and clear state
+      clearCircleState();
       pointAgent = name;
+
       ctx.ui.setStatus("circle", ctx.ui.theme.fg("accent", `🎯 @${pointAgent}`));
       ctx.ui.notify(`Point mode: @${name}. All messages go directly to this agent.\nUse /circle-off to return to normal.`, "success");
     },
@@ -1220,20 +1232,33 @@ export default function (pi: ExtensionAPI) {
       const name = args?.trim() || (await ctx.ui.select("Delete:", circles.map(c => c.name)) ?? undefined);
       if (!name) return;
       if (!(await ctx.ui.confirm("Delete?", `Delete "${name}"? (Global agents are NOT deleted)`))) return;
-      if (activeCircle?.name === name) { activeCircle = null; activeAgent = "center"; ctx.ui.setStatus("circle", undefined); }
+      if (activeCircle?.name === name) { activeCircle = null; activeAgent = "center"; loadedSkills.clear(); ctx.ui.setStatus("circle", undefined); }
       deleteCircle(name) ? ctx.ui.notify("Deleted. Global agents untouched.", "success") : ctx.ui.notify("Not found.", "error");
     },
   });
 
   // ─── Session Lifecycle ─────────────────────────────────────────────
 
+
+  // Clear circle state (for /circle-off or session end)
+  function clearCircleState() {
+    activeCircle = null;
+    activeAgent = "center";
+    pointAgent = null;
+    loadedSkills.clear();
+    prevLoopLastMsg = null;
+  }
+
   pi.on("session_start", async (_event, _ctx) => {
     activeCircle = null;
     activeAgent = "center";
     pointAgent = null;
+
+    loadedSkills.clear();
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    clearCircleState();
     ctx.ui.setStatus("circle", undefined);
   });
 
